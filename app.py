@@ -199,7 +199,8 @@ def get_text_vector(text):
 
 # Extract skills from text
 def extract_skills(text):
-    """Extract technical skills from text"""
+    """Extract technical skills from text with word boundary matching for accuracy"""
+    import re
     # Common technical skills and keywords
     skills_dict = {
         'Python': ['python'],
@@ -245,7 +246,10 @@ def extract_skills(text):
     
     for skill, keywords in skills_dict.items():
         for keyword in keywords:
-            if keyword in text_lower:
+            # Use word boundaries with regex to avoid false matches
+            # \b matches word boundaries, so "ai" won't match in "email"
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            if re.search(pattern, text_lower):
                 found_skills.add(skill)
                 break
     
@@ -438,18 +442,27 @@ if vectors is not None and metadata is not None:
                     if 'show_more_jobs' not in st.session_state:
                         st.session_state.show_more_jobs = False
                     
-                    # Determine how many jobs to display
-                    num_jobs_to_show = len(top_indices) if st.session_state.show_more_jobs else 5
-                    
-                    # Animate job display with staggered effect
-                    for rank, idx in enumerate(top_indices[:num_jobs_to_show], 1):
+                    # Calculate match percentages for all jobs and sort by percentage
+                    jobs_with_scores = []
+                    for idx in top_indices:
                         if idx < len(metadata):
                             job = metadata[idx]
                             job_description = job.get('Job_Description', '')
                             job_skills = extract_skills(job_description)
                             matching_skills = find_matching_skills(uploaded_skills, job_skills)
-                            
                             match_percentage = (len(matching_skills) / max(len(job_skills), 1)) * 100
+                            jobs_with_scores.append((idx, match_percentage, matching_skills, job_skills))
+                    
+                    # Sort by match percentage in descending order
+                    jobs_with_scores.sort(key=lambda x: x[1], reverse=True)
+                    
+                    # Determine how many jobs to display
+                    num_jobs_to_show = len(jobs_with_scores) if st.session_state.show_more_jobs else 5
+                    
+                    # Animate job display with staggered effect
+                    for rank, (idx, match_percentage, matching_skills, job_skills) in enumerate(jobs_with_scores[:num_jobs_to_show], 1):
+                        if idx < len(metadata):
+                            job = metadata[idx]
                             
                             with st.container(border=True):
                                 col_title, col_score = st.columns([3, 1])
@@ -486,7 +499,7 @@ if vectors is not None and metadata is not None:
                                     st.markdown(f"[View Full Job Post]({job['Job_Link']})")
                     
                     # Add View More button if there are more than 5 jobs
-                    if len(top_indices) > 5:
+                    if len(jobs_with_scores) > 5:
                         col1, col2, col3 = st.columns([1, 1, 1])
                         with col2:
                             if not st.session_state.show_more_jobs:
@@ -499,7 +512,7 @@ if vectors is not None and metadata is not None:
                                     st.rerun()
                         
                         if st.session_state.show_more_jobs:
-                            st.info(f"Showing all {len(top_indices)} matching jobs")
+                            st.info(f"Showing all {len(jobs_with_scores)} matching jobs")
                     
                     # FEATURE 9: Smart Recommendations
                     st.markdown("---")
