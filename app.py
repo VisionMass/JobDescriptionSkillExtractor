@@ -9,6 +9,7 @@ from io import BytesIO
 import pickle
 from datetime import datetime
 from collections import Counter
+import time
 
 # Page configuration
 st.set_page_config(
@@ -16,6 +17,141 @@ st.set_page_config(
     page_icon="💼",
     layout="wide"
 )
+
+# Add custom CSS for animations
+st.markdown("""
+<style>
+    @keyframes fadeIn {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+    
+    @keyframes slideInLeft {
+        from {
+            opacity: 0;
+            transform: translateX(-30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+    
+    @keyframes slideInRight {
+        from {
+            opacity: 0;
+            transform: translateX(30px);
+        }
+        to {
+            opacity: 1;
+            transform: translateX(0);
+        }
+    }
+    
+    @keyframes pulse {
+        0%, 100% {
+            opacity: 1;
+        }
+        50% {
+            opacity: 0.7;
+        }
+    }
+    
+    @keyframes shimmer {
+        0% {
+            background-position: -1000px 0;
+        }
+        100% {
+            background-position: 1000px 0;
+        }
+    }
+    
+    .animated-title {
+        animation: fadeIn 1s ease-in-out;
+        font-size: 2.5rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    
+    .animated-subtitle {
+        animation: slideInLeft 1.2s ease-in-out;
+        font-size: 1.1rem;
+        color: #666;
+    }
+    
+    .job-card {
+        animation: fadeIn 0.8s ease-in-out;
+        transition: all 0.3s ease;
+        border-radius: 10px;
+        padding: 20px;
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+    
+    .job-card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+    }
+    
+    .skill-badge {
+        display: inline-block;
+        padding: 8px 12px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        margin: 4px;
+        animation: fadeIn 0.6s ease-in-out;
+        transition: all 0.3s ease;
+    }
+    
+    .skill-badge:hover {
+        transform: scale(1.1);
+        box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+    }
+    
+    .match-score {
+        animation: pulse 2s ease-in-out infinite;
+        font-weight: bold;
+        color: #667eea;
+    }
+    
+    .metric-card {
+        animation: slideInRight 0.8s ease-in-out;
+        text-align: center;
+        padding: 20px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border-radius: 10px;
+    }
+    
+    button {
+        transition: all 0.3s ease;
+    }
+    
+    button:hover {
+        transform: scale(1.05);
+    }
+    
+    .loading-spinner {
+        animation: shimmer 2s infinite;
+        background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+        background-size: 1000px 100%;
+    }
+    
+    .stTabs [data-baseweb="tab-list"] {
+        animation: fadeIn 0.8s ease-in-out;
+    }
+</style>
+""", unsafe_allow_html=True)
 
 st.title("💼 Job Description Skill Extractor")
 st.markdown("Upload a job description PDF to find similar jobs and extract key skills")
@@ -206,14 +342,20 @@ if vectors is not None and metadata is not None:
         col1, col2 = st.columns([1, 1])
         
         with col1:
-            st.subheader("📤 Upload Job Description")
+            st.subheader("Upload Job Description")
             uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
             
             if uploaded_file is not None:
-                # Extract text from PDF
-                pdf_text = extract_text_from_pdf(uploaded_file)
+                # Add loading animation
+                with st.spinner("Processing your PDF..."):
+                    time.sleep(0.3)
+                    # Extract text from PDF
+                    pdf_text = extract_text_from_pdf(uploaded_file)
                 
                 if pdf_text:
+                    st.success("PDF processed successfully!")
+                    time.sleep(0.3)
+                    
                     # Display PDF preview
                     try:
                         pdf_bytes = uploaded_file.getvalue()
@@ -237,11 +379,14 @@ if vectors is not None and metadata is not None:
                         st.warning(f"Could not generate PDF preview: {e}")
                     
                     # Display extracted text
-                    with st.expander("📄 View extracted text"):
+                    with st.expander("View extracted text"):
                         st.text_area("Extracted Text", pdf_text, height=200, disabled=True)
                     
                     # Extract skills from uploaded PDF
-                    uploaded_skills = extract_skills(pdf_text)
+                    with st.spinner("Extracting skills..."):
+                        time.sleep(0.2)
+                        uploaded_skills = extract_skills(pdf_text)
+                    
                     st.session_state.current_upload = {
                         'filename': uploaded_file.name,
                         'text': pdf_text,
@@ -249,30 +394,36 @@ if vectors is not None and metadata is not None:
                     }
         
         with col2:
-            st.subheader("🎯 Matching Results")
+            st.subheader("Matching Results")
             
             if uploaded_file is not None and pdf_text:
                 try:
                     from sklearn.feature_extraction.text import TfidfVectorizer
                     
-                    # Get vector for uploaded document
-                    all_texts = [pdf_text] + [job.get("Job_Description", "") for job in metadata]
-                    vectorizer = TfidfVectorizer(max_features=100)
-                    all_vectors = vectorizer.fit_transform(all_texts).toarray()
-                    uploaded_vector = all_vectors[0].reshape(1, -1)
+                    # Add progress indicator
+                    with st.spinner("Finding matching jobs..."):
+                        time.sleep(0.3)
+                        # Get vector for uploaded document
+                        all_texts = [pdf_text] + [job.get("Job_Description", "") for job in metadata]
+                        vectorizer = TfidfVectorizer(max_features=100)
+                        all_vectors = vectorizer.fit_transform(all_texts).toarray()
+                        uploaded_vector = all_vectors[0].reshape(1, -1)
+                        
+                        # Pad/truncate to match database vectors
+                        if uploaded_vector.shape[1] < vectors.shape[1]:
+                            padding = np.zeros((1, vectors.shape[1] - uploaded_vector.shape[1]))
+                            uploaded_vector = np.hstack([uploaded_vector, padding])
+                        else:
+                            uploaded_vector = uploaded_vector[:, :vectors.shape[1]]
+                        
+                        # Calculate similarity
+                        similarities = cosine_similarity(uploaded_vector, vectors)[0]
+                        top_indices = np.argsort(similarities)[-10:][::-1]
                     
-                    # Pad/truncate to match database vectors
-                    if uploaded_vector.shape[1] < vectors.shape[1]:
-                        padding = np.zeros((1, vectors.shape[1] - uploaded_vector.shape[1]))
-                        uploaded_vector = np.hstack([uploaded_vector, padding])
-                    else:
-                        uploaded_vector = uploaded_vector[:, :vectors.shape[1]]
-                    
-                    # Calculate similarity
-                    similarities = cosine_similarity(uploaded_vector, vectors)[0]
-                    top_indices = np.argsort(similarities)[-10:][::-1]
-                    
-                    # Show extracted skills
+                    st.success("Analysis complete!")
+                    time.sleep(0.2)
+
+                    # Show extracted skills with animation
                     if uploaded_skills:
                         st.markdown(f"**Found Skills:** {', '.join(uploaded_skills)}")
                     else:
@@ -281,8 +432,17 @@ if vectors is not None and metadata is not None:
                     st.markdown("---")
                     
                     # FEATURE 7: Enhanced Job Details with Location, Salary, etc.
-                    st.markdown("**Top 5 Recommended Jobs:**")
-                    for rank, idx in enumerate(top_indices[:5], 1):
+                    st.markdown("**Top 10 Recommended Jobs:**")
+                    
+                    # Add state for showing more jobs
+                    if 'show_more_jobs' not in st.session_state:
+                        st.session_state.show_more_jobs = False
+                    
+                    # Determine how many jobs to display
+                    num_jobs_to_show = len(top_indices) if st.session_state.show_more_jobs else 5
+                    
+                    # Animate job display with staggered effect
+                    for rank, idx in enumerate(top_indices[:num_jobs_to_show], 1):
                         if idx < len(metadata):
                             job = metadata[idx]
                             job_description = job.get('Job_Description', '')
@@ -296,35 +456,54 @@ if vectors is not None and metadata is not None:
                                 with col_title:
                                     st.markdown(f"**#{rank}** - {job.get('Job_Title', 'N/A')}")
                                 with col_score:
-                                    st.markdown(f"**Match:** {match_percentage:.0f}%")
+                                    # Animated match score
+                                    st.markdown(f"<div class='match-score'>Match: {match_percentage:.0f}%</div>", unsafe_allow_html=True)
                                 
-                                st.markdown(f"*🏢 {job.get('Company', 'N/A')}*")
+                                st.markdown(f"*{job.get('Company', 'N/A')}*")
                                 
                                 # FEATURE 7: Show location, work arrangement
                                 col_loc, col_arrange = st.columns(2)
                                 with col_loc:
                                     if job.get('Job_Location'):
-                                        st.caption(f"📍 {job.get('Job_Location')}")
+                                        st.caption(f"Location: {job.get('Job_Location')}")
                                 with col_arrange:
                                     if job.get('Work_Arrangement'):
-                                        st.caption(f"🏢 {job.get('Work_Arrangement')}")
+                                        st.caption(f"Work: {job.get('Work_Arrangement')}")
                                 
+                                # Display matching skills as animated badges
                                 if matching_skills:
-                                    st.markdown(f"**✅ Matching Skills:** {', '.join(matching_skills)}")
+                                    skills_html = " ".join([f"<span class='skill-badge'>{skill}</span>" for skill in matching_skills])
+                                    st.markdown(f"**Matching Skills:** {skills_html}", unsafe_allow_html=True)
                                 else:
-                                    st.markdown("**❌ No matching skills found**")
+                                    st.markdown("**No matching skills found**")
                                 
                                 # Show required skills not in resume
                                 missing = set(job_skills) - set(uploaded_skills)
                                 if missing:
-                                    st.markdown(f"**📚 Skills to Learn:** {', '.join(list(missing)[:3])}")
+                                    st.markdown(f"**Skills to Learn:** {', '.join(list(missing)[:3])}")
                                 
                                 if "Job_Link" in job:
-                                    st.markdown(f"[🔗 View Full Job Post]({job['Job_Link']})")
+                                    st.markdown(f"[View Full Job Post]({job['Job_Link']})")
+                    
+                    # Add View More button if there are more than 5 jobs
+                    if len(top_indices) > 5:
+                        col1, col2, col3 = st.columns([1, 1, 1])
+                        with col2:
+                            if not st.session_state.show_more_jobs:
+                                if st.button("View More Jobs", key="view_more_btn", use_container_width=True):
+                                    st.session_state.show_more_jobs = True
+                                    st.rerun()
+                            else:
+                                if st.button("Show Less", key="show_less_btn", use_container_width=True):
+                                    st.session_state.show_more_jobs = False
+                                    st.rerun()
+                        
+                        if st.session_state.show_more_jobs:
+                            st.info(f"Showing all {len(top_indices)} matching jobs")
                     
                     # FEATURE 9: Smart Recommendations
                     st.markdown("---")
-                    st.subheader("🤖 Skill Recommendations")
+                    st.subheader("Skill Recommendations")
                     recommended = get_skill_recommendations(uploaded_skills, [], metadata, top_indices)
                     if recommended:
                         st.markdown("**To increase match rate with top jobs, consider learning:**")
