@@ -184,10 +184,9 @@ The app uses an intelligent skill extraction system that:
 - **Compatibility Score:** Percentage of your skills that match the job requirements
 - **Top Recommendations:** Most frequently required skills across your top 5 matching jobs
 
-## License
-
-MIT
 
 ## Author
 
-Vision Mass Team
+Vision Mass 
+NTisz
+BE3x
