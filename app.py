@@ -6,6 +6,9 @@ import fitz
 from sklearn.metrics.pairwise import cosine_similarity
 from pathlib import Path
 from io import BytesIO
+import pickle
+from datetime import datetime
+from collections import Counter
 
 # Page configuration
 st.set_page_config(
@@ -118,118 +121,366 @@ def find_matching_skills(uploaded_skills, job_skills):
     matching = set(uploaded_skills) & set(job_skills)
     return sorted(list(matching))
 
+# Initialize session state for history
+def init_session_state():
+    """Initialize session state for upload history and comparisons"""
+    if 'upload_history' not in st.session_state:
+        st.session_state.upload_history = []
+    if 'current_upload' not in st.session_state:
+        st.session_state.current_upload = None
+
+# Save upload to history
+def save_to_history(filename, text, skills, matching_jobs):
+    """Save upload details to history"""
+    history_item = {
+        'timestamp': datetime.now(),
+        'filename': filename,
+        'skills_found': skills,
+        'matching_jobs': matching_jobs,
+        'text_preview': text[:200] + '...' if len(text) > 200 else text
+    }
+    st.session_state.upload_history.append(history_item)
+
+# Get skill recommendations
+def get_skill_recommendations(uploaded_skills, top_jobs_skills, metadata, top_indices, threshold=3):
+    """Recommend skills to learn based on top matching jobs"""
+    recommendations = Counter()
+    
+    for idx in top_indices[:5]:  # Top 5 matching jobs
+        if idx < len(metadata):
+            job = metadata[idx]
+            job_skills = extract_skills(job.get('Job_Description', ''))
+            missing_skills = set(job_skills) - set(uploaded_skills)
+            recommendations.update(missing_skills)
+    
+    # Return skills that appear in multiple top jobs
+    suggested = [skill for skill, count in recommendations.most_common(5) if count >= threshold]
+    return suggested if suggested else list(recommendations.most_common(3))[:3]
+
+# Get database analytics
+def get_database_analytics(metadata):
+    """Get analytics about the job database"""
+    all_jobs_skills = []
+    companies = set()
+    locations = set()
+    
+    for job in metadata:
+        all_jobs_skills.extend(extract_skills(job.get('Job_Description', '')))
+        companies.add(job.get('Company', 'Unknown'))
+        locations.add(job.get('Job_Location', 'Not specified'))
+    
+    skill_counts = Counter(all_jobs_skills)
+    return {
+        'total_jobs': len(metadata),
+        'total_companies': len(companies),
+        'total_locations': len(locations),
+        'top_skills': skill_counts.most_common(10),
+        'unique_skills': len(skill_counts)
+    }
+
 # Main app logic
+init_session_state()
 vectors, metadata = load_data()
 
 if vectors is not None and metadata is not None:
-    # Sidebar
-    st.sidebar.header("📊 Database Info")
-    st.sidebar.metric("Total Jobs", len(metadata))
-    st.sidebar.metric("Vector Dimension", vectors.shape[1])
+    # Get analytics for dashboard
+    analytics = get_database_analytics(metadata)
     
-    # Main content
-    col1, col2 = st.columns([1, 1])
+    # Sidebar with navigation and database info
+    st.sidebar.header("📊 Dashboard")
+    st.sidebar.metric("Total Jobs", analytics['total_jobs'])
+    st.sidebar.metric("Companies", analytics['total_companies'])
+    st.sidebar.metric("Unique Skills", analytics['unique_skills'])
     
-    with col1:
-        st.subheader("📤 Upload Job Description")
-        uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
+    # Show top skills in database
+    st.sidebar.subheader("🔥 Top Skills in Database")
+    top_5_skills = analytics['top_skills'][:5]
+    for i, (skill, count) in enumerate(top_5_skills, 1):
+        st.sidebar.write(f"{i}. {skill} ({count} jobs)")
+    
+    # Navigation
+    page = st.sidebar.radio("Navigate", ["📤 Upload & Match", "📋 History", "🎯 Advanced Search"])
+    
+    # ==================== PAGE 1: UPLOAD & MATCH ====================
+    if page == "📤 Upload & Match":
+        col1, col2 = st.columns([1, 1])
         
-        if uploaded_file is not None:
-            # Extract text from PDF
-            pdf_text = extract_text_from_pdf(uploaded_file)
+        with col1:
+            st.subheader("📤 Upload Job Description")
+            uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
             
-            if pdf_text:
-                # Display PDF preview
-                try:
-                    # Convert PDF to images using PyMuPDF
-                    pdf_bytes = uploaded_file.getvalue()
-                    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
-                    num_pages = doc.page_count
-                    
-                    st.markdown(f"**Total Pages:** {num_pages}")
-                    
-                    # Show pages slider only if multiple pages
-                    if num_pages > 1:
-                        page_num = st.slider("Select page to view:", 1, num_pages, 1)
-                    else:
-                        page_num = 1
-                    
-                    # Render selected page
-                    page = doc[page_num - 1]
-                    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))  # 2x zoom for better quality
-                    img_data = pix.tobytes("png")
-                    st.image(img_data, caption=f"Page {page_num}/{num_pages}")
-                    
-                    doc.close()
-                except Exception as e:
-                    st.warning(f"Could not generate PDF preview: {e}")
+            if uploaded_file is not None:
+                # Extract text from PDF
+                pdf_text = extract_text_from_pdf(uploaded_file)
                 
-                # Display extracted text
-                with st.expander("📄 View extracted text"):
-                    st.text_area("Extracted Text", pdf_text, height=200, disabled=True)
-    
-    with col2:
-        st.subheader("🎯 Similar Jobs")
-        
-        if uploaded_file is not None and pdf_text:
-            # Get vector for uploaded document
-            try:
-                from sklearn.feature_extraction.text import TfidfVectorizer
-                
-                # Combine uploaded text with metadata to get better vector
-                all_texts = [pdf_text] + [job.get("Job_Description", "") for job in metadata]
-                vectorizer = TfidfVectorizer(max_features=100)
-                all_vectors = vectorizer.fit_transform(all_texts).toarray()
-                uploaded_vector = all_vectors[0].reshape(1, -1)
-                
-                # Pad/truncate to match database vectors
-                if uploaded_vector.shape[1] < vectors.shape[1]:
-                    padding = np.zeros((1, vectors.shape[1] - uploaded_vector.shape[1]))
-                    uploaded_vector = np.hstack([uploaded_vector, padding])
-                else:
-                    uploaded_vector = uploaded_vector[:, :vectors.shape[1]]
-                
-                # Calculate similarity
-                similarities = cosine_similarity(uploaded_vector, vectors)[0]
-                top_indices = np.argsort(similarities)[-5:][::-1]
-                
-                # Extract skills from uploaded PDF
-                uploaded_skills = extract_skills(pdf_text)
-                
-                # Display results
-                st.markdown("**Top 5 Similar Jobs:**")
-                for rank, idx in enumerate(top_indices, 1):
-                    if idx < len(metadata):
-                        job = metadata[idx]
-                        job_description = job.get('Job_Description', '')
-                        job_skills = extract_skills(job_description)
-                        matching_skills = find_matching_skills(uploaded_skills, job_skills)
+                if pdf_text:
+                    # Display PDF preview
+                    try:
+                        pdf_bytes = uploaded_file.getvalue()
+                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                        num_pages = doc.page_count
                         
-                        with st.container(border=True):
-                            st.markdown(f"**#{rank}** - {job.get('Job_Title', 'N/A')}")
-                            st.markdown(f"*{job.get('Company', 'N/A')}*")
+                        st.markdown(f"**Total Pages:** {num_pages}")
+                        
+                        if num_pages > 1:
+                            page_num = st.slider("Select page to view:", 1, num_pages, 1)
+                        else:
+                            page_num = 1
+                        
+                        page_obj = doc[page_num - 1]
+                        pix = page_obj.get_pixmap(matrix=fitz.Matrix(2, 2))
+                        img_data = pix.tobytes("png")
+                        st.image(img_data, caption=f"Page {page_num}/{num_pages}")
+                        
+                        doc.close()
+                    except Exception as e:
+                        st.warning(f"Could not generate PDF preview: {e}")
+                    
+                    # Display extracted text
+                    with st.expander("📄 View extracted text"):
+                        st.text_area("Extracted Text", pdf_text, height=200, disabled=True)
+                    
+                    # Extract skills from uploaded PDF
+                    uploaded_skills = extract_skills(pdf_text)
+                    st.session_state.current_upload = {
+                        'filename': uploaded_file.name,
+                        'text': pdf_text,
+                        'skills': uploaded_skills
+                    }
+        
+        with col2:
+            st.subheader("🎯 Matching Results")
+            
+            if uploaded_file is not None and pdf_text:
+                try:
+                    from sklearn.feature_extraction.text import TfidfVectorizer
+                    
+                    # Get vector for uploaded document
+                    all_texts = [pdf_text] + [job.get("Job_Description", "") for job in metadata]
+                    vectorizer = TfidfVectorizer(max_features=100)
+                    all_vectors = vectorizer.fit_transform(all_texts).toarray()
+                    uploaded_vector = all_vectors[0].reshape(1, -1)
+                    
+                    # Pad/truncate to match database vectors
+                    if uploaded_vector.shape[1] < vectors.shape[1]:
+                        padding = np.zeros((1, vectors.shape[1] - uploaded_vector.shape[1]))
+                        uploaded_vector = np.hstack([uploaded_vector, padding])
+                    else:
+                        uploaded_vector = uploaded_vector[:, :vectors.shape[1]]
+                    
+                    # Calculate similarity
+                    similarities = cosine_similarity(uploaded_vector, vectors)[0]
+                    top_indices = np.argsort(similarities)[-10:][::-1]
+                    
+                    # Show extracted skills
+                    if uploaded_skills:
+                        st.markdown(f"**Found Skills:** {', '.join(uploaded_skills)}")
+                    else:
+                        st.markdown("**No specific skills found in document**")
+                    
+                    st.markdown("---")
+                    
+                    # FEATURE 7: Enhanced Job Details with Location, Salary, etc.
+                    st.markdown("**Top 5 Recommended Jobs:**")
+                    for rank, idx in enumerate(top_indices[:5], 1):
+                        if idx < len(metadata):
+                            job = metadata[idx]
+                            job_description = job.get('Job_Description', '')
+                            job_skills = extract_skills(job_description)
+                            matching_skills = find_matching_skills(uploaded_skills, job_skills)
                             
-                            if matching_skills:
-                                st.markdown(f"**Matching Skills:** {', '.join(matching_skills)}")
+                            match_percentage = (len(matching_skills) / max(len(job_skills), 1)) * 100
+                            
+                            with st.container(border=True):
+                                col_title, col_score = st.columns([3, 1])
+                                with col_title:
+                                    st.markdown(f"**#{rank}** - {job.get('Job_Title', 'N/A')}")
+                                with col_score:
+                                    st.markdown(f"**Match:** {match_percentage:.0f}%")
+                                
+                                st.markdown(f"*🏢 {job.get('Company', 'N/A')}*")
+                                
+                                # FEATURE 7: Show location, work arrangement
+                                col_loc, col_arrange = st.columns(2)
+                                with col_loc:
+                                    if job.get('Job_Location'):
+                                        st.caption(f"📍 {job.get('Job_Location')}")
+                                with col_arrange:
+                                    if job.get('Work_Arrangement'):
+                                        st.caption(f"🏢 {job.get('Work_Arrangement')}")
+                                
+                                if matching_skills:
+                                    st.markdown(f"**✅ Matching Skills:** {', '.join(matching_skills)}")
+                                else:
+                                    st.markdown("**❌ No matching skills found**")
+                                
+                                # Show required skills not in resume
+                                missing = set(job_skills) - set(uploaded_skills)
+                                if missing:
+                                    st.markdown(f"**📚 Skills to Learn:** {', '.join(list(missing)[:3])}")
+                                
+                                if "Job_Link" in job:
+                                    st.markdown(f"[🔗 View Full Job Post]({job['Job_Link']})")
+                    
+                    # FEATURE 9: Smart Recommendations
+                    st.markdown("---")
+                    st.subheader("🤖 Skill Recommendations")
+                    recommended = get_skill_recommendations(uploaded_skills, [], metadata, top_indices)
+                    if recommended:
+                        st.markdown("**To increase match rate with top jobs, consider learning:**")
+                        for skill in recommended:
+                            st.write(f"• **{skill}**")
+                    
+                    # Save to history
+                    matching_jobs_info = []
+                    for rank, idx in enumerate(top_indices[:5], 1):
+                        if idx < len(metadata):
+                            matching_jobs_info.append({
+                                'rank': rank,
+                                'title': metadata[idx].get('Job_Title'),
+                                'company': metadata[idx].get('Company')
+                            })
+                    save_to_history(uploaded_file.name, pdf_text, uploaded_skills, matching_jobs_info)
+                    
+                except Exception as e:
+                    st.error(f"Error processing vectors: {e}")
+            else:
+                st.info("Upload a PDF to see matching jobs")
+    
+    # ==================== PAGE 2: HISTORY & COMPARISON ====================
+    elif page == "📋 History":
+        st.subheader("📋 Upload History")
+        
+        if st.session_state.upload_history:
+            col1, col2 = st.columns([3, 1])
+            with col2:
+                if st.button("🗑️ Clear History"):
+                    st.session_state.upload_history = []
+                    st.rerun()
+            
+            # Display history as tabs for each upload
+            if len(st.session_state.upload_history) > 0:
+                for i, item in enumerate(reversed(st.session_state.upload_history)):
+                    with st.expander(f"📄 {item['filename']} - {item['timestamp'].strftime('%Y-%m-%d %H:%M')}"):
+                        col_skills, col_jobs = st.columns(2)
+                        
+                        with col_skills:
+                            st.markdown("**Skills Found:**")
+                            if item['skills_found']:
+                                st.write(', '.join(item['skills_found']))
                             else:
-                                st.markdown("**No matching skills found**")
-                            
-                            if "Job_Link" in job:
-                                st.markdown(f"[View Job]({job['Job_Link']})")
-                
-            except Exception as e:
-                st.error(f"Error processing vectors: {e}")
+                                st.write("No skills found")
+                        
+                        with col_jobs:
+                            st.markdown("**Top Matching Jobs:**")
+                            for job in item['matching_jobs'][:3]:
+                                st.write(f"• {job['title']} ({job['company']})")
+                        
+                        st.markdown("**Preview:**")
+                        st.caption(item['text_preview'])
         else:
-            st.info("Upload a PDF to see similar jobs")
+            st.info("📭 No upload history yet. Upload a PDF to get started!")
+    
+    # ==================== PAGE 3: ADVANCED SEARCH ====================
+    elif page == "🎯 Advanced Search":
+        st.subheader("🎯 Advanced Job Search & Filters")
+        
+        # FEATURE 5: Filter options
+        filter_col1, filter_col2 = st.columns(2)
+        
+        with filter_col1:
+            selected_skills = st.multiselect(
+                "Filter by Skills",
+                sorted(set([skill for job in metadata for skill in extract_skills(job.get('Job_Description', ''))])),
+                help="Select one or more skills to find jobs"
+            )
+            
+            selected_location = st.multiselect(
+                "Filter by Location",
+                sorted(set([job.get('Job_Location', 'Not specified') for job in metadata])),
+                help="Select job locations"
+            )
+        
+        with filter_col2:
+            selected_company = st.multiselect(
+                "Filter by Company",
+                sorted(set([job.get('Company', 'Unknown') for job in metadata]))[:20],
+                help="Top 20 companies hiring"
+            )
+            
+            selected_arrangement = st.multiselect(
+                "Filter by Work Arrangement",
+                sorted(set([job.get('Work_Arrangement', 'Not specified') for job in metadata])),
+                help="E.g., Office, Hybrid, Remote"
+            )
+        
+        # Apply filters
+        filtered_jobs = metadata.copy()
+        
+        if selected_skills:
+            filtered_jobs = [
+                job for job in filtered_jobs 
+                if any(skill in extract_skills(job.get('Job_Description', '')) for skill in selected_skills)
+            ]
+        
+        if selected_location:
+            filtered_jobs = [
+                job for job in filtered_jobs 
+                if job.get('Job_Location') in selected_location
+            ]
+        
+        if selected_company:
+            filtered_jobs = [
+                job for job in filtered_jobs 
+                if job.get('Company') in selected_company
+            ]
+        
+        if selected_arrangement:
+            filtered_jobs = [
+                job for job in filtered_jobs 
+                if job.get('Work_Arrangement') in selected_arrangement
+            ]
+        
+        st.markdown(f"**Found {len(filtered_jobs)} matching jobs**")
+        
+        if filtered_jobs:
+            # Display filtered results
+            for job in filtered_jobs[:20]:  # Show top 20
+                job_skills = extract_skills(job.get('Job_Description', ''))
+                
+                with st.container(border=True):
+                    col_title, col_skills_count = st.columns([3, 1])
+                    with col_title:
+                        st.markdown(f"**{job.get('Job_Title', 'N/A')}**")
+                    with col_skills_count:
+                        st.caption(f"Skills: {len(job_skills)}")
+                    
+                    st.markdown(f"*{job.get('Company', 'N/A')}*")
+                    
+                    col_loc, col_arrange = st.columns(2)
+                    with col_loc:
+                        if job.get('Job_Location'):
+                            st.caption(f"📍 {job.get('Job_Location')}")
+                    with col_arrange:
+                        if job.get('Work_Arrangement'):
+                            st.caption(f"🏢 {job.get('Work_Arrangement')}")
+                    
+                    if job_skills:
+                        st.markdown(f"**Skills Required:** {', '.join(job_skills[:5])}")
+                    
+                    if "Job_Link" in job:
+                        st.markdown(f"[🔗 View Full Job Post]({job['Job_Link']})")
+        else:
+            st.warning("No jobs match your filters. Try adjusting your selections.")
     
     # Footer
     st.divider()
     st.markdown("""
     **How it works:**
-    1. Upload a job description PDF
-    2. The app extracts text from the PDF
-    3. Compares it against the job database using vector similarity
-    4. Shows the most relevant matching jobs
+    1. **Upload & Match** - Upload your resume to find similar jobs
+    2. **History** - View your previous uploads and comparisons
+    3. **Advanced Search** - Filter jobs by skills, location, company, and work arrangement
+    4. **Smart Recommendations** - Get skill suggestions to improve your match rate
     """)
 
 else:

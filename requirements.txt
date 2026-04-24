@@ -1,0 +1,6 @@
+streamlit==1.56.0
+numpy==2.4.4
+PyPDF2
+PyMuPDF==1.27.2.2
+scikit-learn
+python-dotenv

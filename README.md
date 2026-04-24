@@ -43,6 +43,45 @@ A web application that extracts and matches skills from job descriptions using v
    pip install streamlit PyPDF2 google-genai scikit-learn numpy python-dotenv PyMuPDF
    ```
 
+### Windows / PowerShell notes
+
+If you install packages with pip on Windows you may see a warning like:
+
+```
+WARNING: The script streamlit.exe is installed in 'C:\Users\<YourUser>\AppData\Roaming\Python\Python313\Scripts' which is not on PATH.
+```
+
+What this means: pip placed console scripts (like `streamlit.exe`) in your user Scripts folder which isn't on your PATH. You have three simple options:
+
+- Temporary (current PowerShell session only):
+
+```powershell
+$env:Path += ';C:\Users\<YourUser>\AppData\Roaming\Python\Python313\Scripts'
+streamlit run app.py
+```
+
+- Permanent (recommended for convenience): add the Scripts folder to your user PATH. In PowerShell you can run:
+
+```powershell
+$scriptPath = 'C:\Users\<YourUser>\AppData\Roaming\Python\Python313\Scripts'
+if (-not ($env:Path.Split(';') -contains $scriptPath)) {
+   [Environment]::SetEnvironmentVariable('Path', $env:Path + ';' + $scriptPath, 'User')
+   Write-Host "Added to user PATH. Close and reopen PowerShell to apply."
+} else {
+   Write-Host "Path already contains the Scripts folder."
+}
+```
+
+- Alternative (no PATH changes): run Streamlit via the Python module which works regardless of PATH:
+
+```powershell
+python -m streamlit run app.py
+```
+
+Notes:
+- Using a virtual environment (see step 2) is the cleanest approach — it keeps dependencies per-project and avoids touching your user PATH.
+- If you prefer, add the exact Scripts path shown by pip to your Windows user PATH via Settings -> Environment Variables.
+
 ## Running the Application
 
 ```bash
